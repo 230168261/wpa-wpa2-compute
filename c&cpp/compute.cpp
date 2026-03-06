@@ -1,24 +1,39 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <openssl/sha.h>
-#include <openssl/ssl.h>
-#include <openssl/hmac.h>
-#include <openssl/evp.h>
-#include <vector>
-#include <string>
 #include<iostream>
-#include <codecvt>
-#include <locale>
-using namespace std;
+#include<stdio.h>
+#include<string.h>
+#include<thread>
+#include<vector>
+#include"cipher_h/pbkdf2_hmac.h"
+#include"cipher_h/hmac.h"
+#include"read.h"
+#include"compute.h"
 
-unsigned char psswd[] = { 0 }, ssid[] = { 0 }, amac[] = { 0 }, smac[] = { 0 }, anonce[] = { 0 }, snonce[] = { 0 };
+int passwd_number = 0;
+char stop = 0;
 unsigned char min_Mac[6] = { 0 }, max_Mac[6] = { 0 }, min_Nonce[32] = { 0 }, max_Nonce[32] = { 0 };
-unsigned char pmk[32] = { 0 }, ptk_data[100] = { 0 }, ptk[20] = { 0 }, mic[16] = { 0 };
+unsigned char pmk[32] = { 0 }, ptk_data[100] = { 0 }, ptk[20] = { 0 }, mic[16] = { 0 }, data_mic[33] = { 0x84,0x1e,0x91,0x8d,0xc1,0xf4,0x04,0x05,0x44,0x64,0xdd,0xff,0x02,0xc6,0x4b,0x4a };
 unsigned char label[] = { "Pairwise key expansion" };
+char passwd_mark[1] = { 0 };
+char passwd_char[5000][63];
 char hex_out[512] = { 0 };//测试
-const unsigned char ceshi_ptkdata[1] = { 0x00 };
+//const unsigned char ceshi_ptkdata[1] = { 0x00 };
 
+char* read() {
+	if (passwd_number==5001)
+	{
+		passwd_number = 0;
+		read_passwd();
+	}
+	return passwd_char[passwd_number++];
+}
+char compare() {
+	if (memcmp(mic, data_mic, 16)==0) {
+		return passwd_mark[1]='y';
+	}
+	else {
+		return passwd_mark[1]='n';
+	}
+}
 void mac_nonce_compare_create_data(//比较排序，构建ptk输入数据
 	unsigned char* anonce,
 	unsigned char* snonce,
@@ -47,7 +62,6 @@ void mac_nonce_compare_create_data(//比较排序，构建ptk输入数据
 	memcpy(ptk_data, label, 23);
 	
 }
-
 void bin2hex(unsigned char* in, char* out) {
 	const char hex[] = "0123456789ABCDEF";
 	for (int i = 0; i < 32; i++) {
@@ -56,30 +70,20 @@ void bin2hex(unsigned char* in, char* out) {
 	}
 	out[32] = '\0'; 
 }
-
-
-
-void main_compute
-(const char* p_passwd,
-	unsigned char* p_ssid,
+void main_compute(unsigned char* passwd,
+	int passwd_size,
+	unsigned char* ssid,
 	int ssid_len,
-	unsigned char *ptk_data,
-	unsigned char* eapol_data){
-	unsigned int* abc = 0;
-	PKCS5_PBKDF2_HMAC_SHA1(p_passwd,-1,
-		p_ssid, ssid_len,4096,32,pmk);//计算pmk
-	bin2hex(pmk, hex_out);//测试
-	cout << "pmk:" << hex_out << endl;//测试
+	unsigned char* ptk_data,
+	unsigned char* eapol_data) {
+	PKCS5_PBKDF2_HMAC(passwd, passwd_size, ssid, ssid_len, 4096, 32, pmk);
 	ptk_data[99] = 0x00;//计数器，只要一遍
-	HMAC(EVP_sha1(), pmk, 32, ptk_data, 100, ptk, abc);//ptk计算
-	bin2hex(ptk, hex_out);//测试
-	cout << "ptk:" << hex_out<<endl;//测试
-	HMAC(EVP_sha1(), ptk, 16, eapol_data, 123, mic,abc);//计算mic，只取ptk前16字节
-	bin2hex(mic, hex_out);//测试
-	cout <<"mic:"<< hex_out;//测试
+	hmac_sha1(pmk, 32, ptk_data, 100, ptk);
+	hmac_sha1(ptk, 16, eapol_data, 123, mic);
+	//bin2hex(mic, hex_out);
+	//printf(hex_out);
 }
 void compute() {
-	char passwd[] = { "12345678" };//密码输入
 	unsigned char ssid[] = { 0x6f,0x6e,0x65,0x70,0x6c,0x75,0x73,0x20,0x32};//ssid名称转ASCII后的16进制字节
 	unsigned char amac[] = { 0xb6,0x76,0xd8,0x5e,0x01,0x4b };//ap的mac地址
 	unsigned char smac[] = { 0xd4,0xd8,0x53,0xff,0x3e,0x12 };//sta的mac地址
@@ -104,8 +108,37 @@ void compute() {
 		0x04,0x01,0x00,0x00,0x0f,0xac,0x02,0x3c,0x00,0x00,0x00
 	};//在802.1X Authentication栏中的数据，mic字段置零
 	mac_nonce_compare_create_data(anonce, snonce, amac, smac);//先比较，拼数据
-	const char *p_passwd= passwd;//转固定指针
-	unsigned char* p_ssid = ssid;//转固定指针
 	int ssid_len = sizeof(ssid);//转ssid长度
-	main_compute(p_passwd,p_ssid,ssid_len, ptk_data,eapol_data);//进行主计算
+	int passwd_size = 0;
+	read_passwd();
+	while (	compare()!='y') {
+		char* finish =read() ;
+		//printf(read());//测试
+		//printf("\n");
+		passwd_size = strlen(finish);//密码输入,长度计算
+		main_compute((unsigned char*)finish, passwd_size,ssid,ssid_len, ptk_data,eapol_data);//进行主计算
+		if (compare() == 'y')
+		{
+			printf(finish);
+			return;
+		}
+	}
+	
 }
+//void create_thread() {
+//	int* a= &passwd_number;
+//	read_passwd();
+//	//compute();
+//	std::vector<std::thread> thread_compute;
+//	for (size_t i = 0; i < 16; i++)//16换成处理器数量
+//	{
+//		thread_compute.emplace_back(compute);
+//	}
+//	if (stop==1)
+//	{
+//		for (size_t i = 0; i < 16; i++)//16换成处理器数量
+//		{
+//			thread_compute[i].join();
+//		}
+//	}
+//}
